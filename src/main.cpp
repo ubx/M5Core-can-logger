@@ -10,6 +10,7 @@ MCP_CAN CAN0(12); // CS pin
 // SD Card settings
 File logFile;
 unsigned long messageCount = 0;
+unsigned long sdCartWriteCount = 0;
 unsigned long lastDisplayUpdate = 0;
 bool canInitialized = false;
 unsigned long lastMessageCount = 0;
@@ -122,11 +123,12 @@ void loop()
     if (millis() - lastHeapCheck > 5000)
     {
         lastHeapCheck = millis();
-        Serial.printf("System Status - Free Heap: %d, Queue: %d, Buffer: %d/%d\n",
+        Serial.printf("System Status - Free Heap: %d, Queue: %d, Buffer: %d/%d, SD writes %d\n",
                       ESP.getFreeHeap(),
                       uxQueueMessagesWaiting(canQueue),
                       activeBufferPos,
-                      BUFFER_SIZE);
+                      BUFFER_SIZE,
+                      sdCartWriteCount);
     }
     delay(10);
 }
@@ -232,7 +234,7 @@ void SDWriterTask(void* pvParameters)
                 {
                     Serial.println("SD write error!");
                 }
-                if (messageCount % 400 == 0) logFile.flush();
+                sdCartWriteCount++;
             }
         }
         vTaskDelay(1);
