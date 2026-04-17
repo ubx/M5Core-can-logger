@@ -178,13 +178,14 @@ void CANTransmitTask(void* pvParameters)
                 data[i] = hexToByte(dataStr[i * 2], dataStr[i * 2 + 1]);
             }
 
-            if (CAN0.sendMsgBuf(id, 0, len, data) == CAN_OK)
+            byte sndStat = CAN0.sendMsgBuf(id, 0, len, data);
+            if (sndStat == CAN_OK)
             {
                 transmitCount++;
             }
             else
             {
-                Serial.println("Error sending CAN message");
+                Serial.printf("Error sending CAN message: %d\n", sndStat);
             }
         }
     }
