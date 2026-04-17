@@ -16,14 +16,18 @@ bool canInitialized = false;
 unsigned long lastMessageCount = 0;
 unsigned long messagesPerSecond = 0;
 bool sdCardAvailable = false;
+File root;
+File dataFile;
+unsigned long transmitCount = 0;
+bool fileFound = false;
 
 // Dual buffer system
-char buffer1[BUFFER_SIZE];
-char buffer2[BUFFER_SIZE];
-char* activeBuffer = buffer1;
-char* writeBuffer = buffer2;
-size_t activeBufferPos = 0;
-bool bufferReadyToWrite = false;
+// char buffer1[BUFFER_SIZE];
+// char buffer2[BUFFER_SIZE];
+// char* activeBuffer = buffer1;
+// char* writeBuffer = buffer2;
+// size_t activeBufferPos = 0;
+// bool bufferReadyToWrite = false;
 
 struct CANMessage
 {
@@ -33,14 +37,14 @@ struct CANMessage
     double timestamp;
 };
 
-QueueHandle_t canQueue;
+// QueueHandle_t canQueue;
 
 String getTimestampFilename();
 bool initCAN();
-void CANReceiverTask(void* pvParameters);
+// void CANReceiverTask(void* pvParameters);
 void CANTransmitTask(void* pvParameters);
-void CANProcessorTask(void* pvParameters);
-void SDWriterTask(void* pvParameters);
+// void CANProcessorTask(void* pvParameters);
+// void SDWriterTask(void* pvParameters);
 double getUnixTimestamp();
 void displayMessageCount();
 
@@ -66,19 +70,24 @@ void setup()
     }
     else
     {
-        String filename = getTimestampFilename();
-        logFile = SD.open(filename, FILE_WRITE);
-        if (logFile)
+        sdCardAvailable = true;
+        root = SD.open("/");
+        while (true)
         {
-            M5.Lcd.printf("Logging to:\n%s\n", filename.c_str());
-            logFile.println("CAN Bus Log Started");
-            logFile.flush();
-            sdCardAvailable = true;
-        }
-        else
-        {
-            M5.Lcd.println("Failed to open file!");
-            sdCardAvailable = false;
+            dataFile = root.openNextFile();
+            if (!dataFile)
+            {
+                M5.Lcd.println("No files on SD!");
+                break;
+            }
+            if (!dataFile.isDirectory())
+            {
+                M5.Lcd.printf("Found file: %s\n", dataFile.name());
+                Serial.printf("Found file: %s\n", dataFile.name());
+                fileFound = true;
+                break;
+            }
+            dataFile.close();
         }
     }
 
@@ -90,20 +99,15 @@ void setup()
         initCAN();
     }
 
-    // Create message queue
-    canQueue = xQueueCreate(QUEUE_SIZE, sizeof(CANMessage));
-
-    // Start tasks
-    xTaskCreatePinnedToCore(CANReceiverTask, "CANReceiver", 8192, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(CANProcessorTask, "CANProcessor", 8192, NULL, 1, NULL, 1);
-    if (sdCardAvailable)
+    if (fileFound)
     {
-        xTaskCreatePinnedToCore(SDWriterTask, "SDWriter", 8192, NULL, 1, NULL, 1);
+        // Start transmit task
+        xTaskCreatePinnedToCore(CANTransmitTask, "CANTransmit", 8192, NULL, 1, NULL, 1);
     }
 
     // Initial display
     M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println("CAN Messages Received:");
+    M5.Lcd.println("CAN Messages Transmitted:");
     displayMessageCount();
 }
 
@@ -113,8 +117,8 @@ void loop()
     if (millis() - lastDisplayUpdate >= 1000)
     {
         lastDisplayUpdate = millis();
-        messagesPerSecond = messageCount - lastMessageCount;
-        lastMessageCount = messageCount;
+        messagesPerSecond = transmitCount - lastMessageCount;
+        lastMessageCount = transmitCount;
         displayMessageCount();
     }
 
@@ -123,122 +127,76 @@ void loop()
     if (millis() - lastHeapCheck > 5000)
     {
         lastHeapCheck = millis();
-        Serial.printf("System Status - Free Heap: %d, Queue: %d, Buffer: %d/%d, SD writes %d\n",
+        Serial.printf("System Status - Free Heap: %d, Transmitted: %lu\n",
                       ESP.getFreeHeap(),
-                      uxQueueMessagesWaiting(canQueue),
-                      activeBufferPos,
-                      BUFFER_SIZE,
-                      sdCartWriteCount);
+                      transmitCount);
     }
     delay(10);
 }
 
-// ==================== CAN Tasks ====================
+// ==================== CAN Transmit Task ====================
 
-void CANReceiverTask(void* pvParameters)
+uint8_t hexToByte(char high, char low)
 {
-    for (;;)
-    {
-        if (!digitalRead(CAN0_INT))
-        {
-            while (!digitalRead(CAN0_INT))
-            {
-                long unsigned int rxId;
-                unsigned char len = 0;
-                unsigned char rxBuf[8];
-
-                if (CAN0.readMsgBuf(&rxId, &len, rxBuf) == CAN_OK)
-                {
-                    CANMessage msg;
-                    msg.id = rxId;
-                    msg.len = len;
-                    memcpy(msg.buf, rxBuf, len);
-                    msg.timestamp = getUnixTimestamp();
-
-                    if (xQueueSend(canQueue, &msg, pdMS_TO_TICKS(10)) != pdTRUE)
-                    {
-                        Serial.println("Queue full! Dropped message");
-                    }
-                }
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
+    auto charToHex = [](char c) -> uint8_t {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return 0;
+    };
+    return (charToHex(high) << 4) | charToHex(low);
 }
 
-void CANProcessorTask(void* pvParameters)
+void CANTransmitTask(void* pvParameters)
 {
-    CANMessage msg;
-    for (;;)
+    if (!dataFile)
     {
-        if (xQueueReceive(canQueue, &msg, portMAX_DELAY) == pdTRUE)
+        vTaskDelete(NULL);
+        return;
+    }
+
+    Serial.printf("Starting transmission of file: %s\n", dataFile.name());
+
+    while (dataFile.available())
+    {
+        String line = dataFile.readStringUntil('\n');
+        line.trim();
+
+        // Format: (timestamp) can ID#DATA
+        // Example: (1713351000.000000) can 123#0102030405060708
+        int hashPos = line.indexOf('#');
+        int canPos = line.indexOf("can0 ");
+
+        if (hashPos != -1 && canPos != -1)
         {
-            // Format CAN message directly into buffer
-            int needed = snprintf(NULL, 0, "%.6f %lX#", msg.timestamp, msg.id) + (msg.len * 2) + 2;
+            String idStr = line.substring(canPos + 4, hashPos);
+            String dataStr = line.substring(hashPos + 1);
 
-            // Check if we need to switch buffers
-            if (activeBufferPos + needed >= BUFFER_SIZE)
+            unsigned long id = strtoul(idStr.c_str(), NULL, 16);
+            uint8_t len = dataStr.length() / 2;
+            if (len > 8) len = 8;
+            uint8_t data[8];
+
+            for (int i = 0; i < len; i++)
             {
-                bufferReadyToWrite = true;
-                while (bufferReadyToWrite)
-                {
-                    vTaskDelay(1); // Wait for SD writer to swap buffers
-                }
+                data[i] = hexToByte(dataStr[i * 2], dataStr[i * 2 + 1]);
             }
 
-            // Write to active buffer
-            activeBufferPos += snprintf(activeBuffer + activeBufferPos, BUFFER_SIZE - activeBufferPos,
-                                        "(%.6f) can %lX#", msg.timestamp, msg.id);
-            for (byte i = 0; i < msg.len; i++)
+            if (CAN0.sendMsgBuf(id, 0, len, data) == CAN_OK)
             {
-                activeBufferPos += snprintf(activeBuffer + activeBufferPos, BUFFER_SIZE - activeBufferPos,
-                                            "%02X", msg.buf[i]);
+                transmitCount++;
             }
-            activeBufferPos += snprintf(activeBuffer + activeBufferPos, BUFFER_SIZE - activeBufferPos, "\n");
-
-            messageCount++;
-
-            if (!sdCardAvailable)
+            else
             {
-                // Output to serial (optional)
-                Serial.printf("%.6f %lX#", msg.timestamp, msg.id);
-                for (byte i = 0; i < msg.len; i++)
-                {
-                    Serial.printf("%02X", msg.buf[i]);
-                }
-                Serial.println();
+                Serial.println("Error sending CAN message");
             }
+            // Small delay to prevent flooding the bus too much
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
-}
-
-void SDWriterTask(void* pvParameters)
-{
-    for (;;)
-    {
-        if (bufferReadyToWrite)
-        {
-            // Swap buffers
-            char* temp = activeBuffer;
-            activeBuffer = writeBuffer;
-            writeBuffer = temp;
-            size_t writeSize = activeBufferPos;
-            activeBufferPos = 0;
-            bufferReadyToWrite = false;
-
-            // Write to SD card
-            if (logFile)
-            {
-                size_t written = logFile.write((const uint8_t*)writeBuffer, writeSize);
-                if (written != writeSize)
-                {
-                    Serial.println("SD write error!");
-                }
-                sdCartWriteCount++;
-            }
-        }
-        vTaskDelay(1);
-    }
+    dataFile.close();
+    Serial.println("Finished transmitting log file");
+    vTaskDelete(NULL);
 }
 
 // ==================== Utility Functions ====================
@@ -268,7 +226,7 @@ void displayMessageCount()
     M5.Lcd.fillRect(0, 20, 320, 60, BLACK); // Clear display area
     M5.Lcd.setCursor(0, 20);
     M5.Lcd.setTextSize(4);
-    M5.Lcd.printf("%9lu", messageCount); // Total count
+    M5.Lcd.printf("%9lu", transmitCount); // Total count
 
     // Show messages/second
     M5.Lcd.setTextSize(2);
