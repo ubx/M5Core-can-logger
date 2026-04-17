@@ -178,14 +178,39 @@ void CANTransmitTask(void* pvParameters)
                 data[i] = hexToByte(dataStr[i * 2], dataStr[i * 2 + 1]);
             }
 
-            byte sndStat = CAN0.sendMsgBuf(id, 0, len, data);
-            if (sndStat == CAN_OK)
+            byte sndStat = CAN_FAIL;
+            uint8_t retries = 5;
+            while (retries--)
             {
-                transmitCount++;
+                sndStat = CAN0.sendMsgBuf(id, 0, len, data);
+                if (sndStat == CAN_OK)
+                {
+                    transmitCount++;
+                    break;
+                }
+                else if (sndStat == CAN_GETTXBFTIMEOUT)
+                {
+                    // Bus is full or no ACK, wait a bit
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+                else
+                {
+                    // Other error, just log it
+                    break;
+                }
             }
-            else
+
+            if (sndStat != CAN_OK)
             {
-                Serial.printf("Error sending CAN message: %d\n", sndStat);
+                String errStr;
+                switch(sndStat) {
+                    case CAN_GETTXBFTIMEOUT: errStr = "TX Buff Full (No ACK?)"; break;
+                    case CAN_SENDMSGTIMEOUT: errStr = "Send Msg Timeout"; break;
+                    case CAN_FAILTX:         errStr = "Fail TX"; break;
+                    case CAN_CTRLERROR:     errStr = "Controller Error"; break;
+                    default:                 errStr = String(sndStat); break;
+                }
+                Serial.printf("Error sending CAN message: %s\n", errStr.c_str());
             }
         }
     }
