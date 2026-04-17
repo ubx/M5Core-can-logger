@@ -5,21 +5,30 @@
 #### Usage
 
 ```bash
-python3 tools/canid_selector.py <input_file> <output_file> <can_id1> [<can_id2> ...]
+python3 tools/canid_selector.py <input_file> <output_file> [<can_id1> ...] [-canids <file>]
 ```
 
 #### Arguments
 
 - `input`: Path to the input CAN log file (e.g., `data/candump.log`).
 - `output`: Path where the filtered log file will be saved.
-- `ids`: One or more CAN IDs (in hex format, e.g., `76C`, `708`) to keep.
+- `ids`: Optional one or more CAN IDs (in hex format, e.g., `708`, `76C`) to keep.
+- `-canids <file>`: Optional file containing a list of CAN IDs to keep, one per line.
 
-#### Example
+Either `ids` or `-canids` must be provided. Both can be used simultaneously.
+
+#### Examples
 
 To filter `data/candump.log` and keep only messages with IDs `708` and `76C`, saving the result to `filtered.log`:
 
 ```bash
 python3 tools/canid_selector.py data/candump.log filtered.log 708 76C
+```
+
+Alternatively, using a file:
+
+```bash
+python3 tools/canid_selector.py data/candump.log filtered.log -canids tools/canids.txt
 ```
 
 #### Supported Format
