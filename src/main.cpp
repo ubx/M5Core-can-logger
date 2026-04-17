@@ -127,19 +127,45 @@ void CANTransmitTask(void* pvParameters)
 
     Serial.printf("Starting transmission of file: %s\n", dataFile.name());
 
+    double lastTimestamp = -1.0;
+
     while (dataFile.available())
     {
         String line = dataFile.readStringUntil('\n');
         line.trim();
 
-        // Format: (timestamp) can ID#DATA
-        // Example: (1713351000.000000) can 123#0102030405060708
+        // Format: (timestamp) can0 ID#DATA
+        // Example: (1713351000.000000) can0 123#0102030405060708
+        int openParen = line.indexOf('(');
+        int closeParen = line.indexOf(')');
         int hashPos = line.indexOf('#');
         int canPos = line.indexOf("can0 ");
 
-        if (hashPos != -1 && canPos != -1)
+        if (hashPos != -1 && canPos != -1 && openParen != -1 && closeParen > openParen)
         {
-            String idStr = line.substring(canPos + 4, hashPos);
+            String tsStr = line.substring(openParen + 1, closeParen);
+            double currentTimestamp = strtod(tsStr.c_str(), NULL);
+
+            if (lastTimestamp >= 0)
+            {
+                double diff = currentTimestamp - lastTimestamp;
+                if (diff > 0)
+                {
+                    // Delay for the time gap between messages
+                    // vTaskDelay works in ticks, we might need more precision if gaps are very small
+                    // but for log playback vTaskDelay should be okay for ms resolution.
+                    // For better precision we could use ets_delay_us or a high res timer, 
+                    // but sticking to FreeRTOS tasks style.
+                    uint32_t delayMs = (uint32_t)(diff * 1000.0);
+                    if (delayMs > 0)
+                    {
+                        vTaskDelay(pdMS_TO_TICKS(delayMs));
+                    }
+                }
+            }
+            lastTimestamp = currentTimestamp;
+
+            String idStr = line.substring(canPos + 5, hashPos);
             String dataStr = line.substring(hashPos + 1);
 
             unsigned long id = strtoul(idStr.c_str(), NULL, 16);
@@ -160,8 +186,6 @@ void CANTransmitTask(void* pvParameters)
             {
                 Serial.println("Error sending CAN message");
             }
-            // Small delay to prevent flooding the bus too much
-            vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
     dataFile.close();
