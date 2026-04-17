@@ -8,44 +8,16 @@
 MCP_CAN CAN0(12); // CS pin
 
 // SD Card settings
-File logFile;
-unsigned long messageCount = 0;
-unsigned long sdCartWriteCount = 0;
 unsigned long lastDisplayUpdate = 0;
-bool canInitialized = false;
 unsigned long lastMessageCount = 0;
 unsigned long messagesPerSecond = 0;
-bool sdCardAvailable = false;
 File root;
 File dataFile;
 unsigned long transmitCount = 0;
 bool fileFound = false;
 
-// Dual buffer system
-// char buffer1[BUFFER_SIZE];
-// char buffer2[BUFFER_SIZE];
-// char* activeBuffer = buffer1;
-// char* writeBuffer = buffer2;
-// size_t activeBufferPos = 0;
-// bool bufferReadyToWrite = false;
-
-struct CANMessage
-{
-    long unsigned int id;
-    unsigned char len;
-    unsigned char buf[8];
-    double timestamp;
-};
-
-// QueueHandle_t canQueue;
-
-String getTimestampFilename();
 bool initCAN();
-// void CANReceiverTask(void* pvParameters);
 void CANTransmitTask(void* pvParameters);
-// void CANProcessorTask(void* pvParameters);
-// void SDWriterTask(void* pvParameters);
-double getUnixTimestamp();
 void displayMessageCount();
 
 void setup()
@@ -66,11 +38,9 @@ void setup()
     if (!SD.begin(GPIO_NUM_4, SPI, 25000000))
     {
         M5.Lcd.println("SD init failed!");
-        sdCardAvailable = false;
     }
     else
     {
-        sdCardAvailable = true;
         root = SD.open("/");
         while (true)
         {
@@ -213,7 +183,6 @@ bool initCAN()
         {
             CAN0.setMode(MCP_NORMAL);
             pinMode(CAN0_INT, INPUT_PULLUP);
-            canInitialized = true;
             return true;
         }
         delay(100);
@@ -234,37 +203,4 @@ void displayMessageCount()
     M5.Lcd.printf("%d/s", messagesPerSecond);
 
     M5.Lcd.setTextSize(1); // Reset text size
-}
-
-double getUnixTimestamp()
-{
-    m5::rtc_datetime_t now = M5.Rtc.getDateTime();
-    struct tm tm;
-    tm.tm_year = now.date.year - 1900;
-    tm.tm_mon = now.date.month - 1;
-    tm.tm_mday = now.date.date;
-    tm.tm_hour = now.time.hours;
-    tm.tm_min = now.time.minutes;
-    tm.tm_sec = now.time.seconds;
-    time_t time = mktime(&tm);
-
-    static unsigned long startMillis = millis();
-    double secondsFraction = (millis() - startMillis) / 1000.0;
-
-    return (double)time + secondsFraction;
-}
-
-String getTimestampFilename()
-{
-    m5::rtc_datetime_t now = M5.Rtc.getDateTime();
-    char filename[64];
-    snprintf(filename, sizeof(filename),
-             "/candump-%04d%02d%02d-%02d%02d%02d.log",
-             now.date.year,
-             now.date.month,
-             now.date.date,
-             now.time.hours,
-             now.time.minutes,
-             now.time.seconds);
-    return String(filename);
 }
