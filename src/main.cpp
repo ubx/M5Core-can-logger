@@ -83,6 +83,13 @@ void setup()
 
 void loop()
 {
+    M5.update();
+    if (M5.BtnA.wasPressed())
+    {
+        Serial.println("BtnA pressed, shutting down...");
+        M5.Power.powerOff();
+    }
+
     // Update display once per second
     if (millis() - lastDisplayUpdate >= 1000)
     {
